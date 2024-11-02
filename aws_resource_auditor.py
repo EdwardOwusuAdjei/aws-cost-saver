@@ -273,11 +273,9 @@ class AWSResourceAuditor:
                             'StorageCost': 0.0
                         }
                         
-                        # Calculate age
                         launch_time = pd.to_datetime(instance['LaunchTime'])
                         instance_data['Age_Days'] = (pd.Timestamp.now(tz=timezone.utc) - launch_time).total_seconds() / (24 * 3600)
                         
-                        # Get all EBS volumes attached to this instance
                         try:
                             volumes_response = self.ec2.describe_volumes(
                                 Filters=[{'Name': 'attachment.instance-id', 'Values': [instance['InstanceId']]}]
@@ -286,20 +284,18 @@ class AWSResourceAuditor:
                             for volume in volumes_response['Volumes']:
                                 instance_data['TotalStorageGB'] += volume['Size']
                                 volume_type = volume['VolumeType']
-                                # Get price based on volume type
                                 if volume_type == 'gp2':
                                     price = self.pricing_data.get('gp2', 0.10)
                                 elif volume_type == 'gp3':
                                     price = self.pricing_data.get('gp3', 0.08)
                                 else:
-                                    price = 0.10  # Default price if unknown
+                                    price = 0.10  # Default price if unknown, should i even do defaults?
                                 
                                 instance_data['StorageCost'] += volume['Size'] * price
                                 
                         except Exception as e:
                             self.logger.error(f"Error getting volumes for instance {instance['InstanceId']}: {e}")
                         
-                        # Parse stop time if available
                         if 'User initiated' in instance_data['StopTime']:
                             try:
                                 stop_time_str = instance_data['StopTime'].split('(')[1].split(')')[0]
