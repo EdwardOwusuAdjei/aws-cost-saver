@@ -289,7 +289,7 @@ class AWSResourceAuditor:
                                 elif volume_type == 'gp3':
                                     price = self.pricing_data.get('gp3', 0.08)
                                 else:
-                                    price = 0.10  # Default price if unknown, should i even do defaults?
+                                    price = 0.10  # Default price if unknown, should i even do defaults? its a good estimate for the most popular region
                                 
                                 instance_data['StorageCost'] += volume['Size'] * price
                                 
