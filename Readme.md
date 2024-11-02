@@ -22,14 +22,13 @@ chmod +x aws_resource_auditor.py
 ```
 
 ## 💡 Key Features
-- 🔌 Zero configuration required
-- 🤖 Automatic resource discovery
-- 💰 Comprehensive cost analysis
-- 📊 Detailed savings recommendations
-- 📈 Clear action items prioritized by impact
-- 🕒 Age-based resource analysis
-- 💾 Duplicate resource detection
-- 📁 CSV and Markdown reports
+- Zero configuration required
+- Automatic resource discovery
+- Comprehensive cost analysis
+- Detailed savings recommendations
+- Age-based resource analysis
+- Duplicate resource detection
+- CSV and Markdown reports
 
 ## Prerequisites
 - Python 3.7+
