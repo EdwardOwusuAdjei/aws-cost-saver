@@ -68,21 +68,33 @@ class AWSResourceAuditor:
             if eip_response['PriceList']:
                 prices['eip'] = float(list(list(eval(eip_response['PriceList'][0])['terms']['OnDemand'].values())[0]['priceDimensions'].values())[0]['pricePerUnit']['USD'])
 
+            region_prefix = region_name.split('-')[0].upper()
             snapshot_response = self.pricing.get_products(
                 ServiceCode='AmazonEC2',
                 Filters=[
                     {'Type': 'TERM_MATCH', 'Field': 'productFamily', 'Value': 'Storage Snapshot'},
-                    {'Type': 'TERM_MATCH', 'Field': 'regionCode', 'Value': region_name}
+                    {'Type': 'TERM_MATCH', 'Field': 'regionCode', 'Value': region_name},
+                    {'Type': 'TERM_MATCH', 'Field': 'usagetype', 'Value': f'{region_prefix}-EBS:SnapshotUsage'}
                 ]
             )
             if snapshot_response['PriceList']:
-                prices['snapshot'] = float(list(list(eval(snapshot_response['PriceList'][0])['terms']['OnDemand'].values())[0]['priceDimensions'].values())[0]['pricePerUnit']['USD'])
+                for price_item in snapshot_response['PriceList']:
+                    price_data = eval(price_item)
+                    if 'SnapshotUsage' in price_data['product']['attributes'].get('usagetype', ''):
+                        prices['snapshot'] = float(
+                            list(list(price_data['terms']['OnDemand'].values())[0]['priceDimensions'].values())[0]['pricePerUnit']['USD']
+                        )
+                        break
+                
+                if 'snapshot' not in prices:
+                    self.logger.warning(f"Could not find regular snapshot pricing for region {region_name}, using default")
+                    prices['snapshot'] = 0.05 
 
         except Exception as e:
             self.logger.error(f"Error fetching pricing data: {e}")
-            prices = {'gp2': 0.10, 'gp3': 0.08, 'eip': 0.005, 'snapshot': 0.05} 
+            prices = {'gp2': 0.10, 'gp3': 0.08, 'eip': 0.005, 'snapshot': 0.05}
             self.logger.info("Falling back to approximate pricing...")
-            
+        exit(0)
         return prices
 
     def get_instance_name(self, instance: Dict[str, Any]) -> str:
@@ -155,7 +167,7 @@ class AWSResourceAuditor:
                 duplicates['DuplicateCount'] = duplicates['VolumeId'].map(volume_counts)
                 duplicates['StartTime'] = pd.to_datetime(duplicates['StartTime'])
                 duplicates['IsNewest'] = duplicates.groupby('VolumeId')['StartTime'].transform('max') == duplicates['StartTime']
-                snapshot_price = self.pricing_data.get('snapshot', 0.05)
+                snapshot_price = self.pricing_data.get('snapshot', 0.05)  # Price per GB-month
                 duplicates['MonthlyCost'] = duplicates['Size'] * snapshot_price
                 duplicates['PotentialMonthlySavings'] = duplicates.apply(
                     lambda x: x['MonthlyCost'] if not x['IsNewest'] else 0, 
@@ -185,7 +197,7 @@ class AWSResourceAuditor:
                         volumes.append({
                             'InstanceId': volume['Attachments'][0]['InstanceId'],
                             'VolumeId': volume['VolumeId'],
-                            'Size': volume['Size']
+                            'Size': volume['Size']  # Size in GB
                         })
         except ClientError as e:
             self.logger.error(f"Error fetching volumes: {e}")
@@ -200,9 +212,11 @@ class AWSResourceAuditor:
             
             instance_storage.columns = ['InstanceId', 'TotalGP2Storage', 'VolumeCount']
             instance_storage = instance_storage.sort_values('TotalGP2Storage', ascending=False).head(limit)
-            price_diff = self.pricing_data.get('gp2', 0.10) - self.pricing_data.get('gp3', 0.08)
+            
+            # monthly savings (price difference between GP2 and GP3 per GB-month)
             price_diff = self.pricing_data.get('gp2', 0.10) - self.pricing_data.get('gp3', 0.08)
             instance_storage['MonthlySavings'] = instance_storage['TotalGP2Storage'] * price_diff
+            
             names = []
             for instance_id in instance_storage['InstanceId']:
                 try:
@@ -235,6 +249,7 @@ class AWSResourceAuditor:
 
         df = pd.DataFrame(unused_ips)
         if not df.empty:
+            # Calculate monthly cost (hourly rate * 24 * 30)
             hourly_rate = self.pricing_data.get('eip', 0.005)
             df['MonthlyCost'] = hourly_rate * 24 * 30
         return df
@@ -289,7 +304,7 @@ class AWSResourceAuditor:
                                 elif volume_type == 'gp3':
                                     price = self.pricing_data.get('gp3', 0.08)
                                 else:
-                                    price = 0.10  # Default price if unknown, should i even do defaults? its a good estimate for the most popular region
+                                    price = 0.10  # Default price per GB-month
                                 
                                 instance_data['StorageCost'] += volume['Size'] * price
                                 
@@ -319,8 +334,9 @@ class AWSResourceAuditor:
             df['StoppedDays'] = df['StoppedDays'].round(2)
             df['StorageCost'] = df['StorageCost'].round(2)
 
-            df['MonthlyCost'] = df['StorageCost'] * 30 
-            df['YearlyCost'] = df['StorageCost'] * 365  
+            # StorageCost is already monthly cost per GB
+            df['MonthlyCost'] = df['StorageCost']
+            df['YearlyCost'] = df['StorageCost'] * 12
             
             df['LaunchTime'] = pd.to_datetime(df['LaunchTime']).dt.strftime('%Y-%m-%d %H:%M:%S')
             
@@ -344,7 +360,6 @@ class AWSResourceAuditor:
 
     def save_stopped_instances_report(self, df: pd.DataFrame, summary_df: pd.DataFrame, name: str):
         if not df.empty:
-
             csv_path = f"{self.output_dir}/{name}.csv"
             df.to_csv(csv_path, index=False)
             
@@ -363,7 +378,6 @@ class AWSResourceAuditor:
                 
                 f.write("## Detailed Instance List\n")
                 f.write(df.to_markdown(index=False))
-
 
     def save_savings_summary(self, audit_results: Dict[str, pd.DataFrame]):
         """Generate and save savings summary including stopped instances."""
@@ -408,7 +422,7 @@ class AWSResourceAuditor:
             summary.append(f"- Duplicate Snapshots That Can Be Removed: {duplicate_count}")
             summary.append(f"- Total Size of Duplicate Snapshots: {total_size} GB")
         
- 
+
         if 'top_gp2_instances' in audit_results and not audit_results['top_gp2_instances'].empty:
             monthly_gp2_savings = audit_results['top_gp2_instances']['MonthlySavings'].sum()
             total_monthly_savings += monthly_gp2_savings
@@ -444,6 +458,7 @@ class AWSResourceAuditor:
         
         if 'duplicate_snapshots' in audit_results and not audit_results['duplicate_snapshots'].empty:
             dup_monthly = audit_results['duplicate_snapshots']['PotentialMonthlySavings'].sum()
+            duplicate_count = len(audit_results['duplicate_snapshots'][audit_results['duplicate_snapshots']['IsNewest'] == False])
             recommendations.append((
                 "Remove duplicate snapshots",
                 dup_monthly,
@@ -567,8 +582,8 @@ class AWSResourceAuditor:
             self.logger.error(f"Error saving stopped instances summary: {e}")
 
         self.logger.info(f"Audit complete! Files saved in {self.output_dir}/")
-
         return audit_results
+
 
 if __name__ == "__main__":
     auditor = AWSResourceAuditor()
