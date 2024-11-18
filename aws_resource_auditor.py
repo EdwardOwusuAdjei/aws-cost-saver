@@ -94,7 +94,7 @@ class AWSResourceAuditor:
             self.logger.error(f"Error fetching pricing data: {e}")
             prices = {'gp2': 0.10, 'gp3': 0.08, 'eip': 0.005, 'snapshot': 0.05}
             self.logger.info("Falling back to approximate pricing...")
-        exit(0)
+            
         return prices
 
     def get_instance_name(self, instance: Dict[str, Any]) -> str:
